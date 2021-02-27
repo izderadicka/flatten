@@ -9,12 +9,11 @@ from itertools import chain
 __version__ = "0.1"
 
 HELP = """
-Flattens directory structure based on path pattern.
-pattern is regular expession with folowwing additional logic:
-- first pattern is split to individual part (by / or relevant path separator) into segments - each segment is then 
-    considered separately with file path segment
+Flattens directory structure based on path pattern into single directory.
+Pattern is bsically regular expession with folowwing additional logic:
+- first pattern is split (by / or relevant path separator) into segments - each segment is then 
+    considered separately with file path segment - all file segments must match and matching result will be included to flattened file name
 
-all file segments must match
 
 """
 
@@ -27,22 +26,26 @@ class Pattern:
         self.segments = list(map(lambda s: re.compile(s, re.UNICODE), p))
         self.sep = sep
 
+    def _process_segment(self,m):
+        res = m.group(0)
+        for idx in range(1, (m.lastindex or 0)+1):
+            res = res[0:m.start(idx)] + res[m.end(idx):]
+        return res
+
     def new_name(self, path):
         segments = list(path.split(self.path_sep))
         res = []
         pos = 0
         while pos < len(segments):
-                s = segments[pos]
-                p = self.segments[pos]
-                m = p.match(s)
-                if m:
-                    res.append(m.group(0))
-                    pos += 1
-                else:
-                    return None
+            s = segments[pos]
+            p = self.segments[pos]
+            m = p.match(s)
+            if m:
+                res.append(self._process_segment(m))
+                pos += 1
+            else:
+                return None
         return self.sep.join(res)
-
-
 
 
 def parse_args():
@@ -53,8 +56,10 @@ def parse_args():
                    help="String to replace path separator with")
     p.add_argument("-d", "--destination", required=True,
                    help="destination directory")
-    p.add_argument("--dry", action="store_true")
-    
+    p.add_argument("--dry", action="store_true",
+                   help="Dry run - just print command, but do not execute them, nothing should change on disk")
+    p.add_argument("--move", action="store_true", help="Move files instead of copying them")
+
     p.add_argument("--version", action="version", version=__version__)
 
     p.add_argument("path_pattern", metavar="PATH_PATTERN",
@@ -78,6 +83,8 @@ def main():
         else:
             fn(*args, **kwargs)
 
+    pattern = Pattern(args.path_pattern, args.replace_separator)
+
     if not os.path.exists(dest):
         dry(os.makedirs, dest)
     if not os.path.isdir(dest):
@@ -89,8 +96,13 @@ def main():
         for f in files:
             full_path = os.path.join(path, f)
             p = os.path.join(path[len(args.base)+1:], f)
-            fname = p.replace("/", args.replace_separator)
-            dry(shutil.copy, full_path, os.path.join(dest, fname))
+            fname = pattern.new_name(p)
+            if fname:
+                target_path =  os.path.join(dest, fname)
+                if args.move:
+                    dry(shutil.move, full_path, target_path)
+                else:
+                    dry(shutil.copy, full_path, target_path)
 
 
 if __name__ == "__main__":
